@@ -3,84 +3,102 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Surya Bay — an open-world crime game</title>
 <link rel="icon" href="data:,">
+<title>Surya Bay — an open-world crime game</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #0e1420; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
-  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-  #hud { position: fixed; inset: 0; pointer-events: none; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.7); }
-  .bar { width: 220px; height: 14px; background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.35); border-radius: 3px; overflow: hidden; }
-  .bar > div { height: 100%; }
-  #healthFill { background: #37c978; width: 100%; }
-  #armorFill { background: #4aa3ff; width: 0%; }
-  #topLeft { position: absolute; top: 14px; left: 14px; }
-  #topLeft .bar { margin-top: 5px; }
-  #topRight { position: absolute; top: 14px; right: 16px; text-align: right; font-size: 20px; font-weight: 700; }
-  #wanted { font-size: 26px; letter-spacing: 3px; color: #ffd23e; }
-  #wanted .off { color: rgba(255,255,255,.28); }
-  #objective { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); max-width: 46%; text-align: center; font-size: 17px; font-weight: 600; background: rgba(0,0,0,.5); padding: 7px 14px; border-radius: 5px; }
-  #speed { position: absolute; right: 16px; bottom: 16px; font-size: 30px; font-weight: 800; }
-  #speed small { font-size: 14px; font-weight: 400; }
-  #hint { position: absolute; left: 14px; bottom: 230px; font-size: 13px; opacity: .85; }
-  #toast { position: absolute; left: 50%; bottom: 26%; transform: translateX(-50%); font-size: 22px; font-weight: 700; background: rgba(0,0,0,.55); padding: 8px 18px; border-radius: 6px; opacity: 0; transition: opacity .25s; }
-  #minimap { position: absolute; left: 14px; bottom: 14px; border: 2px solid rgba(255,255,255,.5); border-radius: 50%; background: #12203a; }
-  #flash { position: absolute; inset: 0; background: #c00; opacity: 0; }
-  .overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(5,10,25,.72); color: #fff; z-index: 5; }
-  .overlay .panel { max-width: 640px; padding: 30px 38px; text-align: center; background: rgba(10,18,36,.92); border: 1px solid rgba(255,255,255,.25); border-radius: 12px; }
-  .overlay h1 { margin: 0 0 4px; font-size: 52px; letter-spacing: 4px; color: #ffb62e; }
-  .overlay h2 { margin: 0 0 12px; font-size: 20px; font-weight: 400; color: #9fd8ff; }
-  .overlay p { font-size: 15px; line-height: 1.55; color: #dfe8f5; }
-  .overlay .keys { font-size: 13px; color: #aebdd2; line-height: 1.8; }
-  .overlay button { pointer-events: auto; margin-top: 16px; font-size: 19px; font-weight: 700; padding: 12px 30px; border: 0; border-radius: 8px; background: #ffb62e; color: #201400; cursor: pointer; }
-  .overlay button:hover { background: #ffc95e; }
-  .hidden { display: none !important; }
-  /* Read aloud, never shown: the status line screen readers announce. */
-  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0c1218; font-family: "Segoe UI", Arial, sans-serif; color: #fff; }
+  #game { position: fixed; inset: 0; }
+  #game canvas { display: block; }
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+  .panel { background: rgba(8, 14, 20, 0.62); border: 1px solid rgba(255, 255, 255, 0.16); border-radius: 8px; padding: 8px 12px; }
+  #vitals { position: absolute; top: 12px; left: 12px; min-width: 230px; }
+  #vitals .bar { height: 12px; background: rgba(255, 255, 255, 0.18); border-radius: 6px; overflow: hidden; margin: 4px 0 2px; }
+  #health-fill { height: 100%; width: 100%; background: #37c978; }
+  #armor-fill { height: 100%; width: 0%; background: #3f8fd2; }
+  #vitals .lbl { font-size: 10px; letter-spacing: 1px; color: #cfe3ef; }
+  #cash { font-size: 22px; font-weight: 700; color: #7dff9a; margin-top: 4px; }
+  #stars { position: absolute; top: 12px; right: 12px; font-size: 26px; letter-spacing: 4px; color: #ffd23f; text-shadow: 0 0 8px rgba(0, 0, 0, 0.7); }
+  #objective { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); max-width: 46%; text-align: center; font-size: 14px; font-weight: 600; }
+  #minimap { position: absolute; left: 12px; bottom: 12px; width: 180px; height: 180px; border: 2px solid rgba(255, 255, 255, 0.35); border-radius: 6px; background: #20262c; }
+  #speed { position: absolute; right: 16px; bottom: 16px; font-size: 26px; font-weight: 700; display: none; text-shadow: 0 2px 6px rgba(0, 0, 0, 0.8); }
+  #ammo { position: absolute; right: 16px; bottom: 52px; font-size: 14px; font-weight: 600; color: #ffe9a8; text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8); }
+  #toast { position: absolute; left: 50%; bottom: 108px; transform: translateX(-50%); font-size: 16px; font-weight: 600; background: rgba(8, 14, 20, 0.75); border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 8px; padding: 8px 16px; opacity: 0; transition: opacity 0.3s; white-space: nowrap; }
+  #hint { position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%); font-size: 13px; color: #ffe9a8; background: rgba(8, 14, 20, 0.6); border-radius: 6px; padding: 5px 12px; opacity: 0; transition: opacity 0.3s; white-space: nowrap; }
+  #crosshair { position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; display: none; }
+  #crosshair::before, #crosshair::after { content: ""; position: absolute; background: #fff; }
+  #crosshair::before { left: 8px; top: 0; width: 2px; height: 18px; }
+  #crosshair::after { left: 0; top: 8px; width: 18px; height: 2px; }
+  .overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 10; background: linear-gradient(160deg, rgba(6, 20, 34, 0.82), rgba(20, 8, 8, 0.72)); }
+  .card { text-align: center; max-width: 620px; padding: 32px 40px; background: rgba(10, 18, 26, 0.88); border: 1px solid rgba(255, 210, 63, 0.4); border-radius: 14px; }
+  .card h1 { font-size: 54px; letter-spacing: 6px; color: #ffd23f; text-shadow: 0 3px 0 #b3541e, 0 6px 18px rgba(0, 0, 0, 0.6); }
+  .card h2 { font-size: 15px; letter-spacing: 3px; color: #7fd4c0; margin: 4px 0 14px; }
+  .card p { font-size: 14px; line-height: 1.55; color: #dfe9ef; margin: 8px 0; }
+  .card .controls { font-size: 12.5px; color: #a9c2d1; margin: 14px 0; line-height: 1.8; }
+  .card .controls b { color: #ffe9a8; }
+  button { pointer-events: auto; cursor: pointer; font-size: 16px; font-weight: 700; color: #1a1206; background: #ffd23f; border: none; border-radius: 8px; padding: 12px 28px; margin: 6px; }
+  button:hover { background: #ffe27a; }
+  button.ghost { background: transparent; color: #ffd23f; border: 2px solid #ffd23f; }
+  #pause, #wasted { display: none; }
+  #menu { display: flex; }
+  #wasted h1 { color: #ff5a4e; }
+  #save-note { font-size: 12px; color: #8fa8b8; }
 </style>
-</head>
-<body>
-<canvas id="game" aria-label="Surya Bay: an open-world crime game. Walk and drive around a coastal city, take on missions, and stay ahead of the police."></canvas>
-<div id="hud" class="hidden">
-  <div id="topLeft"><div class="bar"><div id="healthFill"></div></div><div class="bar"><div id="armorFill"></div></div></div>
-  <div id="topRight"><div id="cash">$0</div><div id="wanted"></div></div>
-  <div id="objective">Welcome to Surya Bay</div>
-  <div id="speed" class="hidden">0 <small>km/h</small></div>
-  <div id="hint">WASD move &middot; mouse look &middot; E enter car &middot; F punch &middot; Q weapon &middot; P pause &middot; M mute</div>
-  <div id="toast"></div>
-  <canvas id="minimap" width="200" height="200"></canvas>
-  <div id="flash"></div>
-</div>
-<div id="startScreen" class="overlay">
-  <div class="panel">
-    <h1>SURYA BAY</h1>
-    <h2>A sun-soaked city. Your rules.</h2>
-    <p>You are Raka, a courier who just rolled into Surya Bay with an empty wallet and a fast mouth. Steal a car, run jobs for Mama Lina, and stay one step ahead of the Bay Police — five story missions stand between you and the biggest score the city has ever seen.</p>
-    <p class="keys">WASD move &middot; mouse look &middot; Shift run &middot; E enter / exit car &middot; F punch &middot; click shoot &middot; Q switch weapon &middot; P pause &middot; M mute</p>
-    <button id="playButton" type="button">Play Surya Bay</button>
-    <button id="continueButton" type="button" class="hidden">Continue — saved game</button>
-  </div>
-</div>
-<div id="pauseScreen" class="overlay hidden">
-  <div class="panel">
-    <h1 style="font-size:36px">PAUSED</h1>
-    <p>Take a breath. The city waits.</p>
-    <button id="resumeButton" type="button">Resume</button>
-    <button id="saveButton" type="button">Save game</button>
-    <button id="quitButton" type="button">Quit to menu</button>
-  </div>
-</div>
-<div id="bustedScreen" class="overlay hidden">
-  <div class="panel">
-    <h1 style="font-size:36px;color:#ff5d5d">BUSTED</h1>
-    <p id="bustedText">The Bay Police caught up with you.</p>
-    <button id="bustedButton" type="button">Wake up at the hospital</button>
-  </div>
-</div>
-<p id="status" role="status" aria-live="polite"></p>
 <script type="importmap">
 { "imports": { "three": "./vendor/three.min.js" } }
 </script>
+</head>
+<body>
+<div id="game"></div>
+<div id="hud">
+  <div id="vitals" class="panel">
+    <div class="lbl">HEALTH</div>
+    <div class="bar"><div id="health-fill"></div></div>
+    <div class="lbl">ARMOR</div>
+    <div class="bar"><div id="armor-fill"></div></div>
+    <div id="cash">$50</div>
+  </div>
+  <div id="stars">☆☆☆☆☆</div>
+  <div id="objective" class="panel">Surya Bay</div>
+  <canvas id="minimap" width="180" height="180"></canvas>
+  <div id="speed"></div>
+  <div id="ammo"></div>
+  <div id="toast"></div>
+  <div id="hint"></div>
+  <div id="crosshair"></div>
+</div>
+<div id="menu" class="overlay">
+  <div class="card">
+    <h1>SURYA BAY</h1>
+    <h2>AN OPEN-WORLD CRIME GAME</h2>
+    <p>Raka just washed up in Surya Bay with $50 and a borrowed jacket. Mira, the fixer who runs the market, has work for anyone fast enough — couriers, fares, a getaway, a turf war, and one last big job at the Surya Bank.</p>
+    <p>Explore the city on foot or steal any car. Watch the stars: the police notice everything.</p>
+    <div class="controls">
+      <b>WASD</b> move / drive &nbsp; <b>Mouse</b> camera &nbsp; <b>Shift</b> run &nbsp; <b>Space</b> jump / handbrake<br>
+      <b>E</b> enter / exit car &nbsp; <b>Q</b> pistol &nbsp; <b>G</b> / click fire &nbsp; <b>R</b> reload &nbsp; <b>F</b> punch<br>
+      <b>T</b> taxi job &nbsp; <b>U</b> delivery job &nbsp; <b>P</b> / <b>Esc</b> pause
+    </div>
+    <button id="btn-start">Start New Game</button>
+    <button id="btn-continue" class="ghost">Continue Save</button>
+    <p id="save-note">Progress autosaves. All original — a sun-soaked city of our own.</p>
+  </div>
+</div>
+<div id="pause" class="overlay">
+  <div class="card">
+    <h1>PAUSED</h1>
+    <p>Surya Bay waits for no one. Well — except now.</p>
+    <button id="btn-resume">Resume</button>
+    <button id="btn-restart" class="ghost">Restart (clear save)</button>
+    <button id="btn-quit" class="ghost">Save &amp; Quit to Menu</button>
+  </div>
+</div>
+<div id="wasted" class="overlay">
+  <div class="card">
+    <h1>WASTED</h1>
+    <p>Raka went down. The city keeps moving.</p>
+    <button id="btn-wasted">Wake Up at the Hospital</button>
+  </div>
+</div>
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>
-
