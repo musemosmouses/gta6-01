@@ -1,6 +1,1 @@
-[
-  { "name": "1-chase.jpg", "query": "?shot=chase&seed=1" },
-  { "name": "2-street.jpg", "query": "?shot=street&seed=1" },
-  { "name": "3-drive.jpg", "query": "?shot=drive&seed=1" },
-  { "name": "4-menu.jpg", "query": "?shot=menu&seed=1" }
-]
+{"shots":[{"file":"1-chase.jpg","url":"index.html?shot=1","what":"Cover: police chase at speed, 3 wanted stars, minimap and mission objective on the HUD"},{"file":"2-street.jpg","url":"index.html?shot=2","what":"On foot on a busy street with traffic cars and pedestrians"},{"file":"3-drive.jpg","url":"index.html?shot=3","what":"Driving fast down a boulevard, 2 wanted stars, police car behind"},{"file":"4-menu.jpg","url":"index.html?shot=4","what":"Start screen over the city"}]}
