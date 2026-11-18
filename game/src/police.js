@@ -1,285 +1,259 @@
-// police.js — the wanted system of Surya Bay.
-// Crimes raise stars; police cars chase and ram, foot cops chase and grab.
-// Three rules learned the hard way:
-//  - a ram slows the player only on a real closing impact, at most once
-//    per 1.5 s per car — never a per-frame speed tax;
-//  - cars are separated by position only, never by multiplying speeds;
-//  - a cop's grab builds while close and DECAYS when the player pulls
-//    away, instead of resetting to zero.
+// police.js — the wanted system: stars rise with crime, police cruisers
+// spawn and chase the player's effective position (the car when driving,
+// the feet when on foot), foot cops chase and shove, stars decay when the
+// player stays hidden, and the spray garage wipes the record for cash.
 import * as THREE from "three";
-import { makeCar, separateCars, removeCar } from "./vehicles.js";
+import { createCar } from "./vehicles.js";
+import { hurtPlayer } from "./player.js";
+import { makeRng } from "./random.js";
 
-export function makePolice(G) {
-  const P = {
+export function createPolice(S) {
+  S.police = {
     wanted: 0,
-    cars: [],
+    policeCars: [],
     cops: [],
-    crimeCooldown: 0,
-    quietTimer: 0,
-    lastSeen: 0,
+    lastCrime: -100,
+    decayTimer: 0,
+    rng: makeRng(S.seed + 303),
+    sprayCooldown: 0,
+    addWanted: (n, reason) => addWanted(S, n, reason),
   };
+}
 
-  function makeCopMesh() {
-    const g = new THREE.Group();
-    const box = new THREE.BoxGeometry(1, 1, 1);
-    const navy = new THREE.MeshLambertMaterial({ color: 0x1d2f57 });
-    const skin = new THREE.MeshLambertMaterial({ color: 0xc98d64 });
-    const body = new THREE.Mesh(box, navy);
-    body.scale.set(0.58, 0.7, 0.34);
-    body.position.y = 1.12;
-    body.castShadow = true;
-    g.add(body);
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.21, 8, 6), skin);
-    head.position.y = 1.66;
-    g.add(head);
-    const cap = new THREE.Mesh(box, navy);
-    cap.scale.set(0.44, 0.12, 0.44);
-    cap.position.y = 1.86;
-    g.add(cap);
-    const legs = new THREE.Mesh(box, new THREE.MeshLambertMaterial({ color: 0x14181f }));
-    legs.scale.set(0.46, 0.74, 0.28);
-    legs.position.y = 0.37;
-    g.add(legs);
-    return g;
+export function addWanted(S, n, reason) {
+  const pol = S.police;
+  if (n > 0) {
+    pol.wanted = Math.min(5, pol.wanted + n);
+    pol.lastCrime = S.time;
+    pol.decayTimer = 0;
+  }
+  syncPoliceCars(S);
+  syncCops(S);
+}
+
+function syncPoliceCars(S) {
+  const pol = S.police;
+  const want = pol.wanted;
+  // Add cruisers until the count matches the wanted level.
+  while (pol.policeCars.length < want) {
+    const car = spawnPoliceCar(S);
+    if (!car) break;
+    pol.policeCars.push(car);
+  }
+  // Too many cruisers: the extras give up and drive off.
+  while (pol.policeCars.length > want) {
+    const car = pol.policeCars.pop();
+    car.givingUp = true;
+    car.giveUpTimer = 6;
+  }
+}
+
+function spawnPoliceCar(S) {
+  const pol = S.police;
+  const p = S.player;
+  const eff = p.car ? p.car.pos : p.pos;
+  // Spawn on a road 60-90 units from the player.
+  for (let tries = 0; tries < 8; tries++) {
+    const a = pol.rng.next() * Math.PI * 2;
+    const d = 60 + pol.rng.next() * 30;
+    const x = Math.max(-220, Math.min(220, eff.x + Math.cos(a) * d));
+    const z = Math.max(-220, Math.min(220, eff.z + Math.sin(a) * d));
+    const car = createCar(S, x, z, Math.atan2(eff.x - x, eff.z - z), "police", 0x1a252f);
+    // Light bar on the roof: red and blue.
+    const red = new THREE.Mesh(
+      new THREE.BoxGeometry(0.5, 0.18, 0.5),
+      new THREE.MeshLambertMaterial({ color: 0xd23c3c, emissive: 0x550000 })
+    );
+    red.position.set(-0.4, 1.55, -0.2);
+    car.group.add(red);
+    const blue = new THREE.Mesh(
+      new THREE.BoxGeometry(0.5, 0.18, 0.5),
+      new THREE.MeshLambertMaterial({ color: 0x2471ff, emissive: 0x000055 })
+    );
+    blue.position.set(0.4, 1.55, -0.2);
+    car.group.add(blue);
+    car.ramCooldown = 0;
+    car.health = 100;
+    return car;
+  }
+  return null;
+}
+
+function syncCops(S) {
+  const pol = S.police;
+  const want = S.player.onFoot && pol.wanted >= 2 ? Math.min(2, pol.wanted - 1) : 0;
+  while (pol.cops.length < want) {
+    const p = S.player;
+    const a = pol.rng.next() * Math.PI * 2;
+    const cop = makeCop(S, p.pos.x + Math.cos(a) * 25, p.pos.z + Math.sin(a) * 25);
+    pol.cops.push(cop);
+  }
+  while (pol.cops.length > want) {
+    const cop = pol.cops.pop();
+    cop.leaving = true;
+  }
+}
+
+function makeCop(S, x, z) {
+  const group = new THREE.Group();
+  const uniform = new THREE.MeshLambertMaterial({ color: 0x1a2f4a });
+  const skin = new THREE.MeshLambertMaterial({ color: 0xe8b48a });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.0, 0.4), uniform);
+  body.position.y = 1.1;
+  group.add(body);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.45, 0.45), skin);
+  head.position.y = 1.85;
+  group.add(head);
+  const cap = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.5), uniform);
+  cap.position.y = 2.1;
+  group.add(cap);
+  group.position.set(x, 0, z);
+  S.scene.add(group);
+  return {
+    group,
+    pos: new THREE.Vector3(x, 0, z),
+    yaw: 0,
+    health: 100,
+    down: false,
+    kind: "cop",
+    leaving: false,
+    walkPhase: 0,
+  };
+}
+
+export function updatePolice(S, dt) {
+  const pol = S.police;
+  const p = S.player;
+  const eff = p.car ? p.car.pos : p.pos;
+  pol.sprayCooldown = Math.max(0, pol.sprayCooldown - dt);
+
+  // Cruisers chase the effective position and ram on contact.
+  for (let i = pol.policeCars.length - 1; i >= 0; i--) {
+    const car = pol.policeCars[i];
+    if (car.wrecked) continue;
+    car.ramCooldown = Math.max(0, (car.ramCooldown || 0) - dt);
+    const dx = eff.x - car.pos.x;
+    const dz = eff.z - car.pos.z;
+    const dist = Math.hypot(dx, dz);
+    if (car.givingUp) {
+      car.giveUpTimer -= dt;
+      car.speed = Math.max(0, car.speed - 8 * dt);
+      car.pos.x += Math.sin(car.yaw) * car.speed * dt;
+      car.pos.z += Math.cos(car.yaw) * car.speed * dt;
+      car.group.position.set(car.pos.x, 0, car.pos.z);
+      if (car.giveUpTimer <= 0 || dist > 200) {
+        S.scene.remove(car.group);
+        const idx = S.cars.indexOf(car);
+        if (idx >= 0) S.cars.splice(idx, 1);
+        pol.policeCars.splice(i, 1);
+      }
+      continue;
+    }
+    const wantYaw = Math.atan2(dx, dz);
+    let diff = wantYaw - car.yaw;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    car.yaw += Math.max(-2.4 * dt, Math.min(2.4 * dt, diff));
+    const targetSpeed = dist > 30 ? 24 : 19;
+    car.speed += (targetSpeed - car.speed) * Math.min(1, 1.8 * dt);
+    car.pos.x += Math.sin(car.yaw) * car.speed * dt;
+    car.pos.z += Math.cos(car.yaw) * car.speed * dt;
+    car.group.position.set(car.pos.x, 0, car.pos.z);
+    car.group.rotation.y = car.yaw;
+    // Too far away: reposition closer so the chase never dies out.
+    if (dist > 260) {
+      const a = pol.rng.next() * Math.PI * 2;
+      car.pos.x = Math.max(-220, Math.min(220, eff.x + Math.cos(a) * 80));
+      car.pos.z = Math.max(-220, Math.min(220, eff.z + Math.sin(a) * 80));
+      car.group.position.set(car.pos.x, 0, car.pos.z);
+    }
+    // Ram: damage the player (or their car) on contact.
+    if (dist < 4.6 && car.ramCooldown <= 0) {
+      car.ramCooldown = 1.2;
+      S.audio.crash();
+      if (p.onFoot) {
+        hurtPlayer(S, 12, "rammed");
+      } else if (p.car) {
+        p.car.speed *= 0.4;
+        hurtPlayer(S, 6, "rammed");
+        S.hud.toast("Police rammed your car!");
+      }
+    }
   }
 
-  P.addCrime = function (n, reason) {
-    if (n <= 0) return;
-    const now = G.time;
-    if (now - (P.lastCrimeAt || -100) < 2 && P.lastCrimeReason === reason) {
-      // Same crime spammed within 2 s counts once.
-      return;
-    }
-    P.lastCrimeAt = now;
-    P.lastCrimeReason = reason;
-    P.wanted = Math.min(5, P.wanted + n);
-    P.quietTimer = 0;
-    G.hud.setStars(P.wanted);
-  };
-
-  P.spawnPoliceCar = function () {
-    // Reinforcements arrive near where the player IS — the car when
-    // driving, not the spot where they got in.
-    const ex = G.player.car ? G.player.car.pos.x : G.player.pos.x;
-    const ez = G.player.car ? G.player.car.pos.z : G.player.pos.z;
-    const a = G.rng.angle();
-    const x = ex + Math.sin(a) * 90;
-    const z = ez + Math.cos(a) * 90;
-    const car = makeCar(G, {
-      x: Math.max(-300, Math.min(300, x)),
-      z: Math.max(-300, Math.min(300, z)),
-      kind: "police", color: 0xf2f2f2, driver: "police",
-      heading: Math.atan2(ex - x, ez - z),
-    });
-    car.cruise = 30;
-    P.cars.push(car);
-    G.cars.push(car);
-    return car;
-  };
-
-  P.spawnCop = function () {
-    const ex = G.player.car ? G.player.car.pos.x : G.player.pos.x;
-    const ez = G.player.car ? G.player.car.pos.z : G.player.pos.z;
-    const a = G.rng.angle();
-    const x = ex + Math.sin(a) * 26;
-    const z = ez + Math.cos(a) * 26;
-    const mesh = makeCopMesh();
-    mesh.position.set(x, 0, z);
-    G.scene.add(mesh);
-    const cop = {
-      mesh, pos: mesh.position,
-      heading: 0, speed: 0,
-      grabTime: 0, health: 100, flash: 0,
-    };
-    P.cops.push(cop);
-    return cop;
-  };
-
-  P.onCopDown = function (cop) {
-    cop.health = 0;
-    cop.mesh.rotation.x = -Math.PI / 2;
-    cop.mesh.position.y = 0.3;
-    P.addCrime(2, "downed a cop");
-    G.hud.toast("You dropped a cop. That will not be forgotten.");
-    setTimeout(() => {
-      G.scene.remove(cop.mesh);
-      const i = P.cops.indexOf(cop);
-      if (i >= 0) P.cops.splice(i, 1);
-    }, 5000);
-  };
-
-  P.clearWanted = function (why) {
-    P.wanted = 0;
-    G.hud.setStars(0);
-    if (why) G.hud.toast(why);
-  };
-
-  P.update = function (dt) {
-    const player = G.player;
-    // Chase the car the player is driving, not the spot where they got in:
-    // player.pos does not move while the player is behind the wheel. This
-    // one position feeds the pursuit, the ram, the cops, the star decay
-    // and the spray-garage trigger below.
-    const px = player.car ? player.car.pos.x : player.pos.x;
-    const pz = player.car ? player.car.pos.z : player.pos.z;
-
-    // Desired force matches the wanted level.
-    const wantCars = P.wanted >= 2 ? Math.min(P.wanted - 1, 4) : 0;
-    const wantCops = P.wanted >= 1 ? Math.min(P.wanted, 3) : 0;
-    while (P.cars.length < wantCars) P.spawnPoliceCar();
-    while (P.cops.length < wantCops) P.spawnCop();
-    // Surplus police give up and drive off when the heat drops.
-    while (P.cars.length > wantCars) {
-      const car = P.cars[P.cars.length - 1];
-      // Never touch the car the player is driving.
-      if (car.driver === "player") break;
-      P.cars.pop();
-      // A stood-down car leaves the city instead of freezing mid-road.
-      removeCar(G, car);
-    }
-    while (P.cops.length > wantCops) {
-      const cop = P.cops.pop();
-      G.scene.remove(cop.mesh);
-    }
-
-    // Police cars: pursue the player, ram on a cooldown.
-    let anyNear = false;
-    for (const car of P.cars) {
-      if (car.dead) continue;
-      const dx = px - car.pos.x;
-      const dz = pz - car.pos.z;
-      const dist = Math.hypot(dx, dz);
-      if (dist < 55) anyNear = true;
-      // The player's own stolen police car is never driven by its own AI:
-      // it would fight the player's steering and drag the car toward the
-      // spot where it was stolen.
-      if (car.driver !== "player") {
-        const wantHeading = Math.atan2(dx, dz);
-        let d = wantHeading - car.heading;
-        while (d > Math.PI) d -= Math.PI * 2;
-        while (d < -Math.PI) d += Math.PI * 2;
-        car.heading += Math.max(-2.2 * dt, Math.min(2.2 * dt, d));
-        const targetSpeed = dist > 8 ? car.cruise : car.cruise * 0.55;
-        car.speed += (targetSpeed - car.speed) * Math.min(1, 1.8 * dt);
-        car.pos.x += Math.sin(car.heading) * car.speed * dt;
-        car.pos.z += Math.cos(car.heading) * car.speed * dt;
-        car.mesh.rotation.y = car.heading;
-        G.city.pushOut(car.pos, 1.6);
+  // Foot cops chase the player and shove on contact.
+  for (let i = pol.cops.length - 1; i >= 0; i--) {
+    const cop = pol.cops[i];
+    if (cop.down) continue;
+    const dx = eff.x - cop.pos.x;
+    const dz = eff.z - cop.pos.z;
+    const dist = Math.hypot(dx, dz);
+    if (cop.leaving || pol.wanted === 0) {
+      // Walk away and despawn once far off.
+      cop.pos.x += Math.sin(cop.yaw) * 3 * dt;
+      cop.pos.z += Math.cos(cop.yaw) * 3 * dt;
+      cop.group.position.set(cop.pos.x, 0, cop.pos.z);
+      if (dist > 120 || cop.leaving) {
+        S.scene.remove(cop.group);
+        pol.cops.splice(i, 1);
       }
-      // Flash the light bar.
-      const blink = Math.floor(G.time * 6) % 2 === 0;
-      if (car.mesh.userData.lightRed) car.mesh.userData.lightRed.visible = blink;
-      if (car.mesh.userData.lightBlue) car.mesh.userData.lightBlue.visible = !blink;
-      // Ram: only on a real closing impact, at most once per 1.5 s.
-      // Never rams the car the player is driving (that is this car).
-      if (player.car && player.car !== car && dist < 4.2) {
-        const closing = Math.abs(car.speed - player.car.speed);
-        if (closing > 4 && G.time - car.lastRam > 1.5) {
-          car.lastRam = G.time;
-          player.car.speed *= 0.7;
-          player.car.damage += 4;
-          player.hurt(4);
-          G.audio.punch();
-          G.shake = Math.max(G.shake, 0.4);
-          G.hud.toast("Police rammed you!");
-        }
-      }
-      if (!player.car && dist < 3.2) {
-        // A police car that reaches the player on foot nudges them over.
-        // The shove fires only when the hit lands (hurt's own cooldown),
-        // never once per frame — otherwise the player is flung away.
-        if (!player.dead && player.hurtCooldown <= 0) {
-          player.hurt(6);
-          player.pos.x += (px - car.pos.x) / (dist || 1) * 2;
-          player.pos.z += (pz - car.pos.z) / (dist || 1) * 2;
-        }
-      }
+      continue;
     }
-    // Police cars never overlap: positional separation only.
-    for (let i = 0; i < P.cars.length; i++) {
-      for (let j = i + 1; j < P.cars.length; j++) {
-        separateCars(G, P.cars[i], P.cars[j]);
+    cop.yaw = Math.atan2(dx, dz);
+    const step = 5.5 * dt;
+    if (dist > 1.7) {
+      cop.pos.x += (dx / dist) * step;
+      cop.pos.z += (dz / dist) * step;
+    } else if (p.onFoot) {
+      // Shove: gated by the player's own hurt cooldown (0.5 s).
+      hurtPlayer(S, 8, "shoved by a cop");
+    }
+    cop.walkPhase += dt * 9;
+    cop.group.position.set(cop.pos.x, 0, cop.pos.z);
+    cop.group.rotation.y = cop.yaw;
+  }
+
+  // Wanted decay: hidden from every cruiser for a while, stars fall.
+  if (pol.wanted > 0 && S.time - pol.lastCrime > 10) {
+    let nearest = Infinity;
+    for (const car of pol.policeCars) {
+      const d = Math.hypot(car.pos.x - eff.x, car.pos.z - eff.z);
+      if (d < nearest) nearest = d;
+    }
+    if (nearest > 60 || pol.policeCars.length === 0) {
+      pol.decayTimer += dt;
+      if (pol.decayTimer >= 10) {
+        pol.decayTimer = 0;
+        pol.wanted = Math.max(0, pol.wanted - 1);
+        syncPoliceCars(S);
+        syncCops(S);
+        if (pol.wanted === 0) S.hud.toast("You lost the heat.");
       }
+    } else {
+      pol.decayTimer = 0;
     }
+  }
 
-    // Foot cops: run at the player; a grab builds while close and decays
-    // while the player pulls away. Three seconds held means busted.
-    for (const cop of P.cops) {
-      if (cop.health <= 0) continue;
-      const dx = px - cop.pos.x;
-      const dz = pz - cop.pos.z;
-      const dist = Math.hypot(dx, dz);
-      if (dist < 55) anyNear = true;
-      cop.heading = Math.atan2(dx, dz);
-      const speed = dist > 60 ? 0 : 7.2;
-      cop.pos.x += Math.sin(cop.heading) * speed * dt;
-      cop.pos.z += Math.cos(cop.heading) * speed * dt;
-      cop.mesh.rotation.y = cop.heading;
-      G.city.pushOut(cop.pos, 0.5);
-      if (dist < 2.4) {
-        cop.grabTime += dt;
-        if (cop.grabTime >= 2.5) {
-          P.busted();
-          return;
-        }
-      } else {
-        // Decay, don't reset: a half-held player who slips away keeps
-        // most of the cop's grip for a moment.
-        cop.grabTime = Math.max(0, cop.grabTime - dt * 2);
+  // Pay-and-spray: drive into the bay with cash and the record is wiped.
+  if (p.car && pol.wanted > 0 && pol.sprayCooldown <= 0) {
+    const bay = S.city.sprayBay || S.city.spray;
+    const d = Math.hypot(p.car.pos.x - bay.x, p.car.pos.z - bay.z);
+    if (d < 8 && p.cash >= 100) {
+      p.cash -= 100;
+      pol.wanted = 0;
+      pol.sprayCooldown = 5;
+      for (const car of pol.policeCars) {
+        S.scene.remove(car.group);
+        const idx = S.cars.indexOf(car);
+        if (idx >= 0) S.cars.splice(idx, 1);
       }
+      pol.policeCars = [];
+      for (const cop of pol.cops) S.scene.remove(cop.group);
+      pol.cops = [];
+      S.hud.toast("Spray shop: clean ride, clean record — $100");
+      S.audio.cash();
     }
+  }
 
-    // Siren while any police car is active.
-    G.audio.setSiren(P.cars.length > 0);
-
-    // Stars decay when the player stays out of sight and quiet.
-    if (P.wanted > 0) {
-      if (anyNear) {
-        P.quietTimer = 0;
-      } else {
-        P.quietTimer += dt;
-        if (P.quietTimer > 18) {
-          P.wanted -= 1;
-          P.quietTimer = 0;
-          G.hud.setStars(P.wanted);
-          G.hud.toast("The heat is cooling off… " + P.wanted + " star" + (P.wanted === 1 ? "" : "s") + " left.");
-        }
-      }
-    }
-
-    // Spray garage: drive into the bay and the heat is gone for $100.
-    // The trigger radius (14) is wider than the garage collider's push-out,
-    // so the trigger can always be reached.
-    const gr = G.city.garage;
-    const gd = Math.hypot(px - gr.x, pz - gr.z);
-    if (gd < gr.r && P.wanted > 0 && player.car && Math.abs(player.car.speed) < 6) {
-      if (player.cash >= 100) {
-        player.cash -= 100;
-        P.clearWanted("Sprayed clean — $100, no more stars.");
-        G.audio.cash();
-        const bodyMesh = player.car.mesh.children[0];
-        if (bodyMesh && bodyMesh.material && bodyMesh.material.color) {
-          bodyMesh.material.color.setHex([0xc23b2e, 0x2e6fc2, 0xe8b93b, 0x3fae6a][G.rng.int(0, 3)]);
-        }
-      } else if (G.time - (P.sprayMsgAt || -100) > 5) {
-        P.sprayMsgAt = G.time;
-        G.hud.toast("Spray costs $100 — you are short.");
-        G.audio.denied();
-      }
-    }
-  };
-
-  P.busted = function () {
-    const player = G.player;
-    const fine = Math.min(player.cash, 200);
-    player.cash -= fine;
-    P.clearWanted("BUSTED! You lost $" + fine + " and woke up at the hospital.");
-    if (player.car) {
-      player.car.driver = null;
-      player.car = null;
-    }
-    player.respawn();
-  };
-
-  return P;
+  S.audio.siren(pol.wanted >= 1);
 }

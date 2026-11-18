@@ -1,207 +1,185 @@
-// hud.js — the HUD of Surya Bay: health/armor bars, cash, wanted stars,
-// objective line, speed, a canvas 2D minimap, toasts, the start screen
-// and the pause screen. All DOM lives in index.html; this module drives it.
-export function makeHud(G) {
-  const el = (id) => document.getElementById(id);
-  const H = {
-    stars: 0,
+// hud.js — the HUD: health/armor/cash/ammo, wanted stars, the mission
+// objective line, speed, toasts, hints, and the canvas 2D minimap that
+// shows roads, the player, police, cars and the mission marker.
+import { ROADS } from "./city.js";
+import { currentObjective, currentTarget, nearStandHint } from "./missions.js";
+
+export function createHud(S) {
+  const $ = (id) => document.getElementById(id);
+  const hud = {
+    el: {
+      health: $("healthFill"),
+      armor: $("armorFill"),
+      cash: $("cash"),
+      ammo: $("ammo"),
+      stars: $("stars"),
+      objective: $("objective"),
+      speed: $("speed"),
+      toast: $("toast"),
+      hint: $("hint"),
+      crosshair: $("crosshair"),
+      flash: $("wantedFlash"),
+      map: $("minimap"),
+    },
+    mapCtx: $("minimap").getContext("2d"),
     toastTimer: 0,
-    hintTimer: 0,
+    objectiveText: "",
   };
-  const minimap = el("minimap");
-  const mctx = minimap ? minimap.getContext("2d") : null;
+  S.hud = hud;
+  hud.toast = (msg) => {
+    hud.el.toast.textContent = msg;
+    hud.el.toast.style.opacity = "1";
+    hud.toastTimer = 2.6;
+  };
+  hud.setObjective = (text) => {
+    hud.objectiveText = text;
+  };
+  return hud;
+}
 
-  H.setStars = function (n) {
-    H.stars = n;
-    const s = el("stars");
-    if (s) s.textContent = "★".repeat(n) + "☆".repeat(5 - n);
-  };
+export function updateHud(S, dt) {
+  const hud = S.hud;
+  const p = S.player;
+  hud.el.health.style.width = Math.max(0, p.health) + "%";
+  hud.el.armor.style.width = Math.max(0, Math.min(100, p.armor)) + "%";
+  hud.el.cash.textContent = "$" + Math.round(p.cash);
+  hud.el.ammo.textContent = "PISTOL — " + p.ammo + " / " + p.ammoReserve;
 
-  H.toast = function (msg) {
-    const t = el("toast");
-    if (!t) return;
-    t.textContent = msg;
-    t.style.opacity = "1";
-    H.toastTimer = 4;
-  };
+  // Wanted stars: filled gold up to the level, dim beyond it.
+  let stars = "";
+  for (let i = 0; i < 5; i++) {
+    stars += i < S.police.wanted ? "★" : '<span class="off">★</span>';
+  }
+  hud.el.stars.innerHTML = stars;
 
-  H.setHint = function (msg) {
-    const h = el("hint");
-    if (!h) return;
-    h.textContent = msg;
-    h.style.opacity = "1";
-    H.hintTimer = 3;
-  };
+  // Objective line: mission text + distance to the marker.
+  const obj = currentObjective(S);
+  const distText = obj.dist > 1 ? " — " + Math.round(obj.dist) + "m" : "";
+  hud.el.objective.innerHTML = "<b>" + escapeHtml(obj.text) + "</b>" + distText;
 
-  H.showWasted = function () {
-    const w = el("wasted");
-    if (w) w.style.display = "flex";
-  };
-  H.hideWasted = function () {
-    const w = el("wasted");
-    if (w) w.style.display = "none";
-  };
+  // Speed, only while driving.
+  if (p.car && !p.onFoot) {
+    hud.el.speed.innerHTML = Math.round(Math.abs(p.car.speed) * 3.4) + ' <small>km/h</small>';
+  } else {
+    hud.el.speed.textContent = "";
+  }
 
-  H.showMenu = function () {
-    const m = el("menu");
-    if (m) m.style.display = "flex";
-  };
-  H.hideMenu = function () {
-    const m = el("menu");
-    if (m) m.style.display = "none";
-  };
-  H.showPause = function () {
-    const p = el("pause");
-    if (p) p.style.display = "flex";
-  };
-  H.hidePause = function () {
-    const p = el("pause");
-    if (p) p.style.display = "none";
-  };
+  // Toast fade.
+  if (hud.toastTimer > 0) {
+    hud.toastTimer -= dt;
+    if (hud.toastTimer <= 0) hud.el.toast.style.opacity = "0";
+  }
 
-  H.drawMinimap = function () {
-    if (!mctx) return;
-    const S = 180;
-    const scale = S / 700;
-    const toX = (x) => (x + 350) * scale;
-    const toZ = (z) => (z + 350) * scale;
-    mctx.clearRect(0, 0, S, S);
-    // Sea and beach along the south edge.
-    mctx.fillStyle = "#2e7fb8";
-    mctx.fillRect(0, toZ(372), S, S - toZ(372));
-    mctx.fillStyle = "#e6cf9e";
-    mctx.fillRect(0, toZ(312), S, toZ(372) - toZ(312));
-    // City ground.
-    mctx.fillStyle = "#3a3f45";
-    mctx.fillRect(0, 0, S, toZ(312));
-    // Roads.
-    mctx.strokeStyle = "#555a61";
-    mctx.lineWidth = 2;
-    for (const a of G.city.avenues) {
-      mctx.beginPath();
-      mctx.moveTo(toX(a), 0);
-      mctx.lineTo(toX(a), toZ(312));
-      mctx.stroke();
-      mctx.beginPath();
-      mctx.moveTo(0, toZ(a));
-      mctx.lineTo(S, toZ(a));
-      mctx.stroke();
-    }
-    // Spray garage and hospital.
-    mctx.fillStyle = "#2f6fb8";
-    mctx.fillRect(toX(G.city.garage.x) - 3, toZ(G.city.garage.z) - 3, 6, 6);
-    mctx.fillStyle = "#f2f2f2";
-    mctx.fillRect(toX(G.city.hospital.x) - 3, toZ(G.city.hospital.z) - 3, 6, 6);
-    // Traffic cars as grey dots.
-    mctx.fillStyle = "#bbbbbb";
-    for (const car of G.cars) {
-      if (car.dead) continue;
-      mctx.fillRect(toX(car.pos.x) - 1, toZ(car.pos.z) - 1, 2, 2);
-    }
-    // Mission marker: pulsing yellow diamond.
-    if (G.missions.marker) {
-      const pulse = 4 + Math.sin(G.time * 4) * 1.5;
-      mctx.fillStyle = "#ffd23f";
-      const mx = toX(G.missions.marker.x);
-      const mz = toZ(G.missions.marker.z);
-      mctx.beginPath();
-      mctx.moveTo(mx, mz - pulse);
-      mctx.lineTo(mx + pulse, mz);
-      mctx.lineTo(mx, mz + pulse);
-      mctx.lineTo(mx - pulse, mz);
-      mctx.closePath();
-      mctx.fill();
-    }
-    // Police: blue dots with a red ring.
-    for (const car of G.police.cars) {
-      mctx.fillStyle = "#2e6fc2";
-      mctx.beginPath();
-      mctx.arc(toX(car.pos.x), toZ(car.pos.z), 3, 0, Math.PI * 2);
-      mctx.fill();
-      mctx.strokeStyle = "#ff2020";
-      mctx.beginPath();
-      mctx.arc(toX(car.pos.x), toZ(car.pos.z), 4.5, 0, Math.PI * 2);
-      mctx.stroke();
-    }
-    for (const cop of G.police.cops) {
-      mctx.fillStyle = "#2e6fc2";
-      mctx.fillRect(toX(cop.pos.x) - 2, toZ(cop.pos.z) - 2, 4, 4);
-    }
-    // Player arrow, rotated by heading — at the car while driving.
-    const p = G.player;
-    const px = toX(p.car ? p.car.pos.x : p.pos.x);
-    const pz = toZ(p.car ? p.car.pos.z : p.pos.z);
-    mctx.save();
-    mctx.translate(px, pz);
-    mctx.rotate(Math.atan2(Math.sin(p.heading), Math.cos(p.heading)) + Math.PI);
-    mctx.fillStyle = "#ffffff";
-    mctx.beginPath();
-    mctx.moveTo(0, -6);
-    mctx.lineTo(4.5, 5);
-    mctx.lineTo(-4.5, 5);
-    mctx.closePath();
-    mctx.fill();
-    mctx.restore();
-    // North label.
-    mctx.fillStyle = "#dddddd";
-    mctx.font = "bold 10px sans-serif";
-    mctx.fillText("N", S - 12, 12);
-  };
-
-  H.update = function (dt) {
-    const p = G.player;
-    const hb = el("health-fill");
-    if (hb) hb.style.width = Math.max(0, p.health) + "%";
-    const ab = el("armor-fill");
-    if (ab) ab.style.width = Math.max(0, p.armor) + "%";
-    const cash = el("cash");
-    if (cash) cash.textContent = "$" + Math.floor(p.cash);
-    const obj = el("objective");
-    if (obj) {
-      const step = G.missions.currentStep();
-      let text = G.missions.objectiveText();
-      if (step) {
-        const ex = p.car ? p.car.pos.x : p.pos.x;
-        const ez = p.car ? p.car.pos.z : p.pos.z;
-        const d = Math.hypot(ex - step.at.x, ez - step.at.z);
-        text += "  •  " + Math.round(d) + "m";
-        if (step.hold && d < step.r) {
-          text += "  •  " + Math.max(0, step.hold - G.missions.grabTimer).toFixed(1) + "s";
-        }
+  // Context hint at the bottom of the screen.
+  let hint = "";
+  if (S.mode === "play") {
+    if (p.onFoot) {
+      let bestD = 4.5;
+      for (const car of S.cars) {
+        if (car.wrecked) continue;
+        const d = Math.hypot(car.pos.x - p.pos.x, car.pos.z - p.pos.z);
+        if (d < bestD) bestD = d;
       }
-      obj.textContent = text;
+      if (bestD < 4.5) hint = "Press E to enter the car";
+      else hint = nearStandHint(S);
+    } else {
+      hint = "E exit car · SPACE handbrake · P pause";
     }
-    const speed = el("speed");
-    if (speed) {
-      if (!p.onFoot && p.car) {
-        speed.textContent = Math.round(Math.abs(p.car.speed) * 3.6) + " km/h";
-        speed.style.display = "block";
-      } else {
-        speed.style.display = "none";
-      }
-    }
-    const ammo = el("ammo");
-    if (ammo) {
-      ammo.textContent = p.armed ? ("AMMO " + p.ammo + " / " + p.magSize + (p.reloading > 0 ? " — reloading…" : "")) : "";
-    }
-    const cross = el("crosshair");
-    if (cross) cross.style.display = p.armed && p.onFoot ? "block" : "none";
-    if (H.toastTimer > 0) {
-      H.toastTimer -= dt;
-      if (H.toastTimer <= 0) {
-        const t = el("toast");
-        if (t) t.style.opacity = "0";
-      }
-    }
-    if (H.hintTimer > 0) {
-      H.hintTimer -= dt;
-      if (H.hintTimer <= 0) {
-        const h = el("hint");
-        if (h) h.style.opacity = "0";
-      }
-    }
-    H.drawMinimap();
-  };
+  }
+  hud.el.hint.textContent = hint;
 
-  return H;
+  // Crosshair on foot, hidden in a car or in menus.
+  hud.el.crosshair.style.display = S.mode === "play" && p.onFoot ? "block" : "none";
+
+  // Red edge flash while wanted, pulsing.
+  hud.el.flash.style.opacity = S.police.wanted > 0 && S.mode === "play"
+    ? String(0.35 + 0.3 * Math.sin(S.time * 5))
+    : "0";
+
+  drawMinimap(S);
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function drawMinimap(S) {
+  const ctx = S.hud.mapCtx;
+  const W = 180;
+  const scale = W / 560; // world -280..280 maps to 0..180
+  const mx = (x) => (x + 280) * scale;
+  const my = (z) => (z + 280) * scale;
+
+  ctx.fillStyle = "#10202e";
+  ctx.fillRect(0, 0, W, W);
+  // Sea at the south edge, beach above it.
+  ctx.fillStyle = "#2e86c1";
+  ctx.fillRect(0, my(280), W, W - my(280));
+  ctx.fillStyle = "#e8d29a";
+  ctx.fillRect(0, my(244), W, my(280) - my(244));
+  // Roads.
+  ctx.strokeStyle = "#5a636b";
+  ctx.lineWidth = 2;
+  for (const v of ROADS) {
+    ctx.beginPath(); ctx.moveTo(mx(v), 0); ctx.lineTo(mx(v), W); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, my(v)); ctx.lineTo(W, my(v)); ctx.stroke();
+  }
+  // Buildings as dark blocks.
+  ctx.fillStyle = "#233140";
+  for (const b of S.city.colliders) {
+    ctx.fillRect(mx(b.minX), my(b.minZ), Math.max(1, (b.maxX - b.minX) * scale), Math.max(1, (b.maxZ - b.minZ) * scale));
+  }
+  // Spray garage (the bay ring, not the building) and safehouse.
+  ctx.fillStyle = "#2ecc71";
+  const sprayAt = S.city.sprayBay || S.city.spray;
+  ctx.fillRect(mx(sprayAt.x) - 2, my(sprayAt.z) - 2, 4, 4);
+  ctx.fillStyle = "#e67e22";
+  ctx.fillRect(mx(S.city.safehouse.x) - 2, my(S.city.safehouse.z) - 2, 4, 4);
+  // Mission target.
+  const t = currentTarget(S);
+  if (t) {
+    ctx.fillStyle = "#ffd23d";
+    ctx.beginPath();
+    ctx.arc(mx(t.x), my(t.z), 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#ffd23d";
+    ctx.beginPath();
+    ctx.arc(mx(t.x), my(t.z), 8, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  // Traffic cars, then pedestrians.
+  ctx.fillStyle = "#ffffff";
+  for (const car of S.cars) {
+    if (car.kind === "traffic" || car.kind === "parked") {
+      ctx.fillRect(mx(car.pos.x) - 1, my(car.pos.z) - 1, 2, 2);
+    }
+  }
+  ctx.fillStyle = "#9aa5ad";
+  for (const ped of S.peds) {
+    if (!ped.down) ctx.fillRect(mx(ped.pos.x) - 1, my(ped.pos.z) - 1, 2, 2);
+  }
+  // Police cruisers and foot cops.
+  ctx.fillStyle = "#ff3b30";
+  for (const car of S.police.policeCars) {
+    ctx.beginPath();
+    ctx.arc(mx(car.pos.x), my(car.pos.z), 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  for (const cop of S.police.cops) {
+    ctx.fillRect(mx(cop.pos.x) - 1, my(cop.pos.z) - 1, 2, 2);
+  }
+  // The player: a green triangle pointing where they face.
+  const p = S.player;
+  const yaw = p.car ? p.car.yaw : p.yaw;
+  ctx.fillStyle = "#3ddc5a";
+  ctx.save();
+  ctx.translate(mx(p.pos.x), my(p.pos.z));
+  ctx.rotate(Math.atan2(Math.sin(yaw), Math.cos(yaw)) + Math.PI);
+  ctx.beginPath();
+  ctx.moveTo(0, -6);
+  ctx.lineTo(4, 5);
+  ctx.lineTo(-4, 5);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
 }

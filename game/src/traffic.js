@@ -1,93 +1,134 @@
-// traffic.js — AI cars that drive the city's roads: they follow one avenue
-// or street, turn at intersections, and slow down for the car ahead.
-// They are background life, not the player's car.
-import { makeCar, separateCars } from "./vehicles.js";
+// traffic.js — AI cars that drive the road grid: they keep to their lane,
+// turn at intersections, brake for the car ahead, and stay near the
+// player by respawning on a nearby road when they drift too far.
+import { ROADS, randomRoadPoint } from "./city.js";
+import { createCar } from "./vehicles.js";
+import { makeRng } from "./random.js";
 
-export function makeTraffic(G) {
-  const T = { cars: [] };
+const TRAFFIC_COUNT = 14;
 
-  function spawnOne() {
-    const spot = G.city.randomRoadPoint(G.rng);
-    const kind = G.rng.chance(0.12) ? "taxi" : (G.rng.chance(0.12) ? "truck" : "sedan");
-    const car = makeCar(G, {
-      x: spot.x, z: spot.z, kind,
-      heading: spot.alongX ? (G.rng.chance(0.5) ? 0 : Math.PI) : (G.rng.chance(0.5) ? Math.PI / 2 : -Math.PI / 2),
-      driver: "traffic",
-    });
-    car.cruise = G.rng.range(8, 14);
-    car.lane = G.rng.pick([-3, 3]);
-    car.alongX = spot.alongX;
-    car.dir = car.heading === 0 || car.heading === Math.PI / 2 ? 1 : -1;
-    T.cars.push(car);
-    G.cars.push(car);
-    return car;
+export function spawnTraffic(S) {
+  const rng = makeRng(S.seed + 101);
+  S.trafficRng = rng;
+  for (let i = 0; i < TRAFFIC_COUNT; i++) {
+    const spot = randomRoadPoint(rng);
+    const car = createCar(S, spot.x, spot.z, spot.axis === "z" ? (spot.dir > 0 ? 0 : Math.PI) : (spot.dir > 0 ? Math.PI / 2 : -Math.PI / 2), "traffic", 0x888888);
+    // Recolor each traffic car from the shared palette.
+    car.group.children[0].material = car.group.children[0].material.clone();
+    car.group.children[0].material.color.setHex(pickColor(rng));
+    car.ai = {
+      axis: spot.axis,
+      line: spot.axis === "z" ? spot.x : spot.z,
+      dir: spot.dir,
+      speed: rng.range(8, 13),
+      targetSpeed: rng.range(8, 13),
+      turnCooldown: rng.range(1, 4),
+    };
+    car.speed = car.ai.speed;
   }
+}
 
-  T.init = function (n) {
-    for (let i = 0; i < n; i++) spawnOne();
-  };
+function pickColor(rng) {
+  const colors = [0xc0392b, 0x2e86c1, 0xf5d76e, 0x27ae60, 0x8e44ad, 0xe67e22, 0xecf0f1, 0x1a1a1a, 0x16a085, 0x95a5a6];
+  return colors[Math.floor(rng.next() * colors.length)];
+}
 
-  T.update = function (dt) {
-    for (const car of T.cars) {
-      if (car.dead) continue;
-      // The player's car is driven by the player, never by traffic AI:
-      // otherwise the AI would fight the steering and drag the car onto
-      // its own route. It rejoins traffic when the player gets out.
-      if (car.driver === "player") continue;
-      // Desired heading: along the current road, in the current direction.
-      let wantHeading = car.alongX ? (car.dir > 0 ? 0 : Math.PI) : (car.dir > 0 ? Math.PI / 2 : -Math.PI / 2);
-      // At an intersection, sometimes turn onto the cross road.
-      const nearLine = (v) => {
-        const m = ((v % 52) + 52) % 52;
-        return Math.min(m, 52 - m) < 2.5;
-      };
-      if ((car.alongX && nearLine(car.pos.z)) || (!car.alongX && nearLine(car.pos.x))) {
-        if (G.rng.chance(0.012)) {
-          car.alongX = !car.alongX;
-          car.dir = G.rng.chance(0.5) ? 1 : -1;
-          wantHeading = car.alongX ? (car.dir > 0 ? 0 : Math.PI) : (car.dir > 0 ? Math.PI / 2 : -Math.PI / 2);
-        }
-      }
-      let d = wantHeading - car.heading;
-      while (d > Math.PI) d -= Math.PI * 2;
-      while (d < -Math.PI) d += Math.PI * 2;
-      car.heading += Math.max(-1.6 * dt, Math.min(1.6 * dt, d));
-      // Slow for the car ahead in the same lane.
-      let targetSpeed = car.cruise;
-      const fx = Math.sin(car.heading);
-      const fz = Math.cos(car.heading);
-      for (const other of G.cars) {
-        if (other === car || other.dead) continue;
-        const dx = other.pos.x - car.pos.x;
-        const dz = other.pos.z - car.pos.z;
-        const along = dx * fx + dz * fz;
-        const side = Math.abs(dx * fz - dz * fx);
-        if (along > 0 && along < 13 && side < 3.2) {
-          targetSpeed = Math.min(targetSpeed, Math.max(0, other.speed - 1));
-        }
-      }
-      car.speed += (targetSpeed - car.speed) * Math.min(1, 1.6 * dt);
-      car.pos.x += fx * car.speed * dt;
-      car.pos.z += fz * car.speed * dt;
-      car.mesh.rotation.y = car.heading;
-      // Keep inside the city; recycle far cars to a fresh road.
-      if (Math.abs(car.pos.x) > 320 || Math.abs(car.pos.z) > 320) {
-        const spot = G.city.randomRoadPoint(G.rng);
-        car.pos.x = spot.x;
-        car.pos.z = spot.z;
-        car.alongX = spot.alongX;
-        car.dir = G.rng.chance(0.5) ? 1 : -1;
-        car.heading = car.alongX ? (car.dir > 0 ? 0 : Math.PI) : (car.dir > 0 ? Math.PI / 2 : -Math.PI / 2);
-      }
-      G.city.pushOut(car.pos, 1.6);
+function nearestRoad(v) {
+  let best = ROADS[0];
+  for (const r of ROADS) if (Math.abs(r - v) < Math.abs(best - v)) best = r;
+  return best;
+}
+
+export function updateTraffic(S, dt) {
+  const p = S.player;
+  const effX = p.pos.x;
+  const effZ = p.pos.z;
+  for (const car of S.cars) {
+    if (car.kind !== "traffic" || car.wrecked) continue;
+    const ai = car.ai;
+    if (!ai) continue;
+    ai.turnCooldown -= dt;
+
+    // Where the car is heading, and what is in front of it.
+    const fx = Math.sin(car.yaw);
+    const fz = Math.cos(car.yaw);
+    let blocked = false;
+    for (const other of S.cars) {
+      if (other === car || other.wrecked) continue;
+      const dx = other.pos.x - car.pos.x;
+      const dz = other.pos.z - car.pos.z;
+      const along = dx * fx + dz * fz;
+      const side = Math.abs(dx * fz - dz * fx);
+      if (along > 0 && along < 11 && side < 2.6) { blocked = true; break; }
     }
-    // Pairwise separation so traffic never overlaps itself.
-    for (let i = 0; i < T.cars.length; i++) {
-      for (let j = i + 1; j < T.cars.length; j++) {
-        separateCars(G, T.cars[i], T.cars[j]);
+    // The player on foot in the road also makes traffic brake.
+    if (!blocked && p.onFoot) {
+      const dx = p.pos.x - car.pos.x;
+      const dz = p.pos.z - car.pos.z;
+      const along = dx * fx + dz * fz;
+      const side = Math.abs(dx * fz - dz * fx);
+      if (along > 0 && along < 9 && side < 2.4) blocked = true;
+    }
+
+    const want = blocked ? 0 : ai.targetSpeed;
+    car.speed += (want - car.speed) * Math.min(1, 2.2 * dt);
+
+    // Turn at intersections: snap onto the crossing road.
+    const alongPos = ai.axis === "z" ? car.pos.z : car.pos.x;
+    let nearest = ROADS[0];
+    for (const v of ROADS) if (Math.abs(v - alongPos) < Math.abs(nearest - alongPos)) nearest = v;
+    if (ai.turnCooldown <= 0 && Math.abs(alongPos - nearest) < 2.5 && S.trafficRng.next() < 0.35) {
+      ai.turnCooldown = 3 + S.trafficRng.next() * 4;
+      // Turn onto the crossing road: the line becomes the intersection
+      // just reached (the along-coordinate snaps to its road line).
+      const newLine = nearest;
+      const newDir = S.trafficRng.next() < 0.5 ? 1 : -1;
+      if (ai.axis === "z") {
+        car.pos.z = newLine;
+        ai.axis = "x";
+        ai.line = newLine;
+        ai.dir = newDir;
+        car.yaw = newDir > 0 ? Math.PI / 2 : -Math.PI / 2;
+      } else {
+        car.pos.x = newLine;
+        ai.axis = "z";
+        ai.line = newLine;
+        ai.dir = newDir;
+        car.yaw = newDir > 0 ? 0 : Math.PI;
       }
     }
-  };
 
-  return T;
+    // Drive along the lane, gently correcting drift back to the line.
+    const speed = car.speed * ai.dir;
+    if (ai.axis === "z") {
+      car.pos.z += speed * dt;
+      car.pos.x += (ai.line - car.pos.x) * Math.min(1, 1.5 * dt);
+    } else {
+      car.pos.x += speed * dt;
+      car.pos.z += (ai.line - car.pos.z) * Math.min(1, 1.5 * dt);
+    }
+    car.group.position.set(car.pos.x, 0, car.pos.z);
+    car.group.rotation.y = car.yaw;
+
+    // Too far from the player: respawn on a nearby road.
+    const dPlayer = Math.hypot(car.pos.x - effX, car.pos.z - effZ);
+    if (dPlayer > 320) {
+      const spot = randomRoadPoint(S.trafficRng);
+      // Bias the respawn toward the player's neighbourhood, then snap the
+      // cross coordinate onto the nearest road line so it stays on asphalt.
+      car.pos.x = Math.max(-220, Math.min(220, spot.x * 0.4 + effX * 0.6));
+      car.pos.z = Math.max(-220, Math.min(220, spot.z * 0.4 + effZ * 0.6));
+      ai.axis = spot.axis;
+      if (spot.axis === "z") {
+        car.pos.x = nearestRoad(car.pos.x);
+        ai.line = car.pos.x;
+      } else {
+        car.pos.z = nearestRoad(car.pos.z);
+        ai.line = car.pos.z;
+      }
+      ai.dir = spot.dir;
+      car.yaw = spot.axis === "z" ? (spot.dir > 0 ? 0 : Math.PI) : (spot.dir > 0 ? Math.PI / 2 : -Math.PI / 2);
+      car.speed = ai.targetSpeed;
+    }
+  }
 }

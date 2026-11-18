@@ -1,96 +1,62 @@
-// input.js — keyboard + mouse for Surya Bay.
-// Keys are read, never drained: every system sees the same `tapped` set
-// until the frame ends, so a menu and the game can never eat each other's input.
-// Mouse look uses pointer lock; arrow keys rotate the camera as a fallback
-// (and as the only camera control when pointer lock is unavailable).
-export function makeInput(canvas) {
-  const keys = new Set();
-  const tapped = new Set();
-  const buttons = new Set();
-  const tappedButtons = new Set();
-  let mouseDX = 0;
-  let mouseDY = 0;
-  let locked = false;
+// input.js — keyboard + mouse state. The game reads keys by code, and the
+// camera reads the mouse deltas the pointer lock produces. Arrow keys also
+// turn the camera, so the game stays playable without pointer lock.
+export function createInput(canvas) {
+  const input = {
+    keys: new Set(),
+    mouseDX: 0,
+    mouseDY: 0,
+    mouseDown: false,
+    locked: false,
+    anyKey: false,
+  };
 
-  function onKeyDown(e) {
-    if (e.repeat) return;
-    keys.add(e.code);
-    tapped.add(e.code);
-    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) {
-      e.preventDefault();
-    }
-  }
-  function onKeyUp(e) {
-    keys.delete(e.code);
-  }
-  function onMouseMove(e) {
-    if (locked) {
-      mouseDX += e.movementX || 0;
-      mouseDY += e.movementY || 0;
-    }
-  }
-  function onMouseDown(e) {
-    buttons.add(e.button);
-    tappedButtons.add(e.button);
-  }
-  function onMouseUp(e) {
-    buttons.delete(e.button);
-  }
-  function onLockChange() {
-    locked = document.pointerLockElement === canvas;
-  }
+  window.addEventListener("keydown", (e) => {
+    if (e.code === "Space") e.preventDefault();
+    if (!e.repeat) input.anyKey = true;
+    input.keys.add(e.code);
+  });
+  window.addEventListener("keyup", (e) => input.keys.delete(e.code));
+  window.addEventListener("blur", () => input.keys.clear());
 
-  window.addEventListener("keydown", onKeyDown);
-  window.addEventListener("keyup", onKeyUp);
-  window.addEventListener("mousemove", onMouseMove);
-  window.addEventListener("mousedown", onMouseDown);
-  window.addEventListener("mouseup", onMouseUp);
-  document.addEventListener("pointerlockchange", onLockChange);
-
-  function requestLock() {
-    if (!locked && canvas.requestPointerLock) {
+  canvas.addEventListener("click", () => {
+    if (!input.locked && document.pointerLockElement !== canvas) {
       try {
-        const p = canvas.requestPointerLock();
-        if (p && p.catch) p.catch(() => {});
+        canvas.requestPointerLock();
       } catch (err) {
-        // Pointer lock is a nicety; arrow keys still turn the camera.
+        // Pointer lock is a nicety, not a requirement.
       }
     }
-  }
+  });
+  document.addEventListener("pointerlockchange", () => {
+    input.locked = document.pointerLockElement === canvas;
+  });
+  document.addEventListener("mousemove", (e) => {
+    if (input.locked) {
+      input.mouseDX += e.movementX || 0;
+      input.mouseDY += e.movementY || 0;
+    }
+  });
+  canvas.addEventListener("mousedown", (e) => {
+    if (e.button === 0) input.mouseDown = true;
+  });
+  window.addEventListener("mouseup", (e) => {
+    if (e.button === 0) input.mouseDown = false;
+  });
 
-  function down(code) {
-    return keys.has(code);
-  }
-  function hit(code) {
-    return tapped.has(code);
-  }
-  function hitButton(button) {
-    return tappedButtons.has(button);
-  }
-  // WASD / arrows drive: x = strafe right, z = forward.
-  function moveAxis() {
-    let x = 0;
-    let z = 0;
-    if (keys.has("KeyW") || keys.has("ArrowUp")) z += 1;
-    if (keys.has("KeyS") || keys.has("ArrowDown")) z -= 1;
-    if (keys.has("KeyD")) x += 1;
-    if (keys.has("KeyA")) x -= 1;
-    const len = Math.hypot(x, z) || 1;
-    return { x: x / len, z: z / len };
-  }
-  function takeMouse() {
-    const dx = mouseDX;
-    const dy = mouseDY;
-    mouseDX = 0;
-    mouseDY = 0;
-    return { dx, dy };
-  }
-  function endFrame() {
-    tapped.clear();
-    tappedButtons.clear();
-  }
-  function isLocked() {
-    return locked;
-  }
-  return { down, hit, hitButton, moveAxis, takeMouse, endFrame, requestLock, isLocked };
+  return input;
+}
+
+export function down(input, ...codes) {
+  for (const c of codes) if (input.keys.has(c)) return true;
+  return false;
+}
+
+// Consume the accumulated mouse deltas (call once per frame).
+export function takeMouse(input) {
+  const dx = input.mouseDX;
+  const dy = input.mouseDY;
+  input.mouseDX = 0;
+  input.mouseDY = 0;
+  return { dx, dy };
 }
