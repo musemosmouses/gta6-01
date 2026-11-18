@@ -1,115 +1,93 @@
-// Traffic: AI cars that cruise the road loops. Each car owns a rectangular
-// loop around one or two blocks and follows its waypoints at city speed,
-// slowing when another car is ahead and waiting when the player blocks the
-// road. Cars far behind the player are recycled to a fresh loop near the
-// player, so the streets always feel busy without simulating the whole city.
+// traffic.js — AI cars that drive the city's roads: they follow one avenue
+// or street, turn at intersections, and slow down for the car ahead.
+// They are background life, not the player's car.
+import { makeCar, separateCars } from "./vehicles.js";
 
-import * as THREE from 'three';
+export function makeTraffic(G) {
+  const T = { cars: [] };
 
-export function createTraffic(G) {
-  const cars = [];
-  const MAX_TRAFFIC = 14;
-
-  function makeLoop() {
-    const vertical = G.rng.chance(0.5);
-    const lineA = G.rng.pick(G.city.roadCenters);
-    const lineB = lineA + (G.rng.chance(0.5) ? 56 : -56);
-    const min = -G.city.half + 20;
-    const max = G.city.half - 20;
-    const a = G.rng.range(min, max - 120);
-    const b = a + G.rng.range(90, 200);
-    const pts = vertical
-      ? [new THREE.Vector3(lineA, 0, a), new THREE.Vector3(lineA, 0, b), new THREE.Vector3(lineB, 0, b), new THREE.Vector3(lineB, 0, a)]
-      : [new THREE.Vector3(a, 0, lineA), new THREE.Vector3(b, 0, lineA), new THREE.Vector3(b, 0, lineB), new THREE.Vector3(a, 0, lineB)];
-    return { pts, i: G.rng.int(0, 3), dir: G.rng.chance(0.5) ? 1 : -1 };
-  }
-
-  function spawnTrafficCar() {
-    const loop = makeLoop();
-    const start = loop.pts[loop.i];
-    const car = G.vehicles.spawnCar(start.x, start.z, 0, G.rng.pick(G.vehicles.COLORS), 'traffic');
-    car.traffic = { loop, speed: G.rng.range(8, 11) };
-    cars.push(car);
+  function spawnOne() {
+    const spot = G.city.randomRoadPoint(G.rng);
+    const kind = G.rng.chance(0.12) ? "taxi" : (G.rng.chance(0.12) ? "truck" : "sedan");
+    const car = makeCar(G, {
+      x: spot.x, z: spot.z, kind,
+      heading: spot.alongX ? (G.rng.chance(0.5) ? 0 : Math.PI) : (G.rng.chance(0.5) ? Math.PI / 2 : -Math.PI / 2),
+      driver: "traffic",
+    });
+    car.cruise = G.rng.range(8, 14);
+    car.lane = G.rng.pick([-3, 3]);
+    car.alongX = spot.alongX;
+    car.dir = car.heading === 0 || car.heading === Math.PI / 2 ? 1 : -1;
+    T.cars.push(car);
+    G.cars.push(car);
     return car;
   }
 
-  function spawnParkedCars() {
-    // A row of parked cars along the beach road and a few downtown, so there
-    // is always something to steal near the spawn.
-    const spots = [];
-    for (let x = -240; x <= 240; x += 48) spots.push({ x, z: G.city.beachZ - 24, heading: Math.PI / 2 });
-    for (let i = 0; i < 10; i += 1) {
-      const p = G.city.randomRoadPoint();
-      spots.push({ x: p.x + 4, z: p.z, heading: G.rng.chance(0.5) ? 0 : Math.PI / 2 });
-    }
-    for (const s of spots) {
-      const car = G.vehicles.spawnCar(s.x, s.z, s.heading, G.rng.pick(G.vehicles.COLORS), 'parked');
-      car.traffic = null;
-    }
-  }
+  T.init = function (n) {
+    for (let i = 0; i < n; i++) spawnOne();
+  };
 
-  function carAhead(car, dist) {
-    const fx = Math.sin(car.heading);
-    const fz = Math.cos(car.heading);
-    for (const other of G.vehicles.list) {
-      if (other === car || !other.alive) continue;
-      const dx = other.pos.x - car.pos.x;
-      const dz = other.pos.z - car.pos.z;
-      const along = dx * fx + dz * fz;
-      const side = Math.abs(dx * fz - dz * fx);
-      if (along > 0 && along < dist && side < 3.2) return true;
-    }
-    return false;
-  }
-
-  function update(dt) {
-    const playerPos = G.player.pos;
-    // Keep the streets busy near the player.
-    while (cars.length < MAX_TRAFFIC) spawnTrafficCar();
-    for (let i = cars.length - 1; i >= 0; i -= 1) {
-      const car = cars[i];
-      if (!car.alive) {
-        cars.splice(i, 1);
-        continue;
+  T.update = function (dt) {
+    for (const car of T.cars) {
+      if (car.dead) continue;
+      // The player's car is driven by the player, never by traffic AI:
+      // otherwise the AI would fight the steering and drag the car onto
+      // its own route. It rejoins traffic when the player gets out.
+      if (car.driver === "player") continue;
+      // Desired heading: along the current road, in the current direction.
+      let wantHeading = car.alongX ? (car.dir > 0 ? 0 : Math.PI) : (car.dir > 0 ? Math.PI / 2 : -Math.PI / 2);
+      // At an intersection, sometimes turn onto the cross road.
+      const nearLine = (v) => {
+        const m = ((v % 52) + 52) % 52;
+        return Math.min(m, 52 - m) < 2.5;
+      };
+      if ((car.alongX && nearLine(car.pos.z)) || (!car.alongX && nearLine(car.pos.x))) {
+        if (G.rng.chance(0.012)) {
+          car.alongX = !car.alongX;
+          car.dir = G.rng.chance(0.5) ? 1 : -1;
+          wantHeading = car.alongX ? (car.dir > 0 ? 0 : Math.PI) : (car.dir > 0 ? Math.PI / 2 : -Math.PI / 2);
+        }
       }
-      const t = car.traffic;
-      if (!t) {
-        cars.splice(i, 1);
-        continue;
-      }
-      // Recycle cars that drifted far from the player onto a fresh loop.
-      if (car.pos.distanceTo(playerPos) > 260) {
-        const loop = makeLoop();
-        const start = loop.pts[loop.i];
-        car.pos.set(start.x, 0, start.z);
-        car.traffic.loop = loop;
-        car.speed = 0;
-      }
-      const target = t.loop.pts[t.loop.i];
-      const dx = target.x - car.pos.x;
-      const dz = target.z - car.pos.z;
-      const dist = Math.hypot(dx, dz);
-      if (dist < 4) {
-        t.loop.i = (t.loop.i + t.loop.dir + 4) % 4;
-      }
-      const wantHeading = Math.atan2(dx, dz);
-      let diff = wantHeading - car.heading;
-      while (diff > Math.PI) diff -= Math.PI * 2;
-      while (diff < -Math.PI) diff += Math.PI * 2;
-      car.heading += Math.max(-1.6 * dt, Math.min(1.6 * dt, diff));
-      const blocked = carAhead(car, 11);
-      const wantSpeed = blocked ? 0 : t.speed;
-      car.speed += Math.max(-14 * dt, Math.min(14 * dt, wantSpeed - car.speed));
+      let d = wantHeading - car.heading;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      car.heading += Math.max(-1.6 * dt, Math.min(1.6 * dt, d));
+      // Slow for the car ahead in the same lane.
+      let targetSpeed = car.cruise;
       const fx = Math.sin(car.heading);
       const fz = Math.cos(car.heading);
+      for (const other of G.cars) {
+        if (other === car || other.dead) continue;
+        const dx = other.pos.x - car.pos.x;
+        const dz = other.pos.z - car.pos.z;
+        const along = dx * fx + dz * fz;
+        const side = Math.abs(dx * fz - dz * fx);
+        if (along > 0 && along < 13 && side < 3.2) {
+          targetSpeed = Math.min(targetSpeed, Math.max(0, other.speed - 1));
+        }
+      }
+      car.speed += (targetSpeed - car.speed) * Math.min(1, 1.6 * dt);
       car.pos.x += fx * car.speed * dt;
       car.pos.z += fz * car.speed * dt;
-      G.city.collideCircle(car.pos, 2.2);
-      car.group.rotation.y = car.heading;
-      car.spin += car.speed * dt * 1.4;
-      for (const wheel of car.wheels) wheel.rotation.x = car.spin;
+      car.mesh.rotation.y = car.heading;
+      // Keep inside the city; recycle far cars to a fresh road.
+      if (Math.abs(car.pos.x) > 320 || Math.abs(car.pos.z) > 320) {
+        const spot = G.city.randomRoadPoint(G.rng);
+        car.pos.x = spot.x;
+        car.pos.z = spot.z;
+        car.alongX = spot.alongX;
+        car.dir = G.rng.chance(0.5) ? 1 : -1;
+        car.heading = car.alongX ? (car.dir > 0 ? 0 : Math.PI) : (car.dir > 0 ? Math.PI / 2 : -Math.PI / 2);
+      }
+      G.city.pushOut(car.pos, 1.6);
     }
-  }
+    // Pairwise separation so traffic never overlaps itself.
+    for (let i = 0; i < T.cars.length; i++) {
+      for (let j = i + 1; j < T.cars.length; j++) {
+        separateCars(G, T.cars[i], T.cars[j]);
+      }
+    }
+  };
 
-  return { cars, spawnTrafficCar, spawnParkedCars, update };
+  return T;
 }

@@ -1,123 +1,96 @@
-// Keyboard and mouse input for Surya Bay. Held keys are read every frame as a
-// movement vector; one-shot presses (enter a car, punch, switch weapon, pause,
-// mute, confirm) are queued as named actions and taken once by the loop, so a
-// press between two frames is never lost and never counted twice. The mouse
-// turns the camera: pointer lock when the browser grants it, click-and-drag
-// otherwise, so the game still steers in a headless window.
-
-export const ACTION_CONFIRM = 'confirm';
-export const ACTION_PAUSE = 'pause';
-export const ACTION_INTERACT = 'interact';
-export const ACTION_PUNCH = 'punch';
-export const ACTION_WEAPON = 'weapon';
-export const ACTION_MUTE = 'mute';
-
-const MOVE_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight', 'Space']);
-const ONE_SHOT = new Map([
-  ['Enter', ACTION_CONFIRM],
-  ['Space', ACTION_CONFIRM],
-  ['KeyP', ACTION_PAUSE],
-  ['Escape', ACTION_PAUSE],
-  ['KeyE', ACTION_INTERACT],
-  ['KeyF', ACTION_PUNCH],
-  ['KeyQ', ACTION_WEAPON],
-  ['KeyM', ACTION_MUTE],
-]);
-
-export function createInput(canvas) {
+// input.js — keyboard + mouse for Surya Bay.
+// Keys are read, never drained: every system sees the same `tapped` set
+// until the frame ends, so a menu and the game can never eat each other's input.
+// Mouse look uses pointer lock; arrow keys rotate the camera as a fallback
+// (and as the only camera control when pointer lock is unavailable).
+export function makeInput(canvas) {
   const keys = new Set();
-  const queued = [];
+  const tapped = new Set();
+  const buttons = new Set();
+  const tappedButtons = new Set();
   let mouseDX = 0;
   let mouseDY = 0;
-  let dragging = false;
-  let lastX = 0;
-  let lastY = 0;
   let locked = false;
 
-  window.addEventListener('keydown', (event) => {
-    if (event.target && (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA')) return;
-    if (MOVE_KEYS.has(event.code) || ONE_SHOT.has(event.code)) event.preventDefault();
-    keys.add(event.code);
-    const action = ONE_SHOT.get(event.code);
-    if (action && !event.repeat) queued.push(action);
-  });
-  window.addEventListener('keyup', (event) => {
-    keys.delete(event.code);
-  });
-  // A key released while the tab is hidden never sends keyup: let go on blur.
-  window.addEventListener('blur', () => {
-    keys.clear();
-    dragging = false;
-  });
+  function onKeyDown(e) {
+    if (e.repeat) return;
+    keys.add(e.code);
+    tapped.add(e.code);
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(e.code)) {
+      e.preventDefault();
+    }
+  }
+  function onKeyUp(e) {
+    keys.delete(e.code);
+  }
+  function onMouseMove(e) {
+    if (locked) {
+      mouseDX += e.movementX || 0;
+      mouseDY += e.movementY || 0;
+    }
+  }
+  function onMouseDown(e) {
+    buttons.add(e.button);
+    tappedButtons.add(e.button);
+  }
+  function onMouseUp(e) {
+    buttons.delete(e.button);
+  }
+  function onLockChange() {
+    locked = document.pointerLockElement === canvas;
+  }
 
-  canvas.addEventListener('click', () => {
-    if (document.pointerLockElement !== canvas) {
+  window.addEventListener("keydown", onKeyDown);
+  window.addEventListener("keyup", onKeyUp);
+  window.addEventListener("mousemove", onMouseMove);
+  window.addEventListener("mousedown", onMouseDown);
+  window.addEventListener("mouseup", onMouseUp);
+  document.addEventListener("pointerlockchange", onLockChange);
+
+  function requestLock() {
+    if (!locked && canvas.requestPointerLock) {
       try {
         const p = canvas.requestPointerLock();
         if (p && p.catch) p.catch(() => {});
-      } catch {
-        // Pointer lock is a nicety; drag-to-look below still works.
+      } catch (err) {
+        // Pointer lock is a nicety; arrow keys still turn the camera.
       }
     }
-  });
-  document.addEventListener('pointerlockchange', () => {
-    locked = document.pointerLockElement === canvas;
-  });
-  document.addEventListener('mousemove', (event) => {
-    if (locked) {
-      mouseDX += event.movementX || 0;
-      mouseDY += event.movementY || 0;
-    } else if (dragging) {
-      mouseDX += event.clientX - lastX;
-      mouseDY += event.clientY - lastY;
-      lastX = event.clientX;
-      lastY = event.clientY;
-    }
-  });
-  canvas.addEventListener('pointerdown', (event) => {
-    if (event.button === 0) {
-      dragging = true;
-      lastX = event.clientX;
-      lastY = event.clientY;
-    }
-  });
-  window.addEventListener('pointerup', () => {
-    dragging = false;
-  });
+  }
 
-  return {
-    keys,
-    /** True while the code is held down. */
-    held(code) {
-      return keys.has(code);
-    },
-    /** -1..1 forward/back, -1..1 left/right, from WASD or arrows. */
-    moveVector() {
-      const f = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
-      const s = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
-      return { forward: f, strafe: s, run: keys.has('ShiftLeft') || keys.has('ShiftRight') };
-    },
-    /** Mouse travel since the last call, in pixels. */
-    takeMouse() {
-      const out = { dx: mouseDX, dy: mouseDY };
-      mouseDX = 0;
-      mouseDY = 0;
-      return out;
-    },
-    /** True while the left mouse button is held (dragging or locked). */
-    get mouseDown() {
-      return dragging || locked;
-    },
-    /** The one-shot actions queued since the last call. */
-    takeActions() {
-      const out = queued.slice();
-      queued.length = 0;
-      return out;
-    },
-    /** Queue a one-shot action from another system (touch buttons, tests). */
-    queue(action) {
-      queued.push(action);
-    },
-  };
+  function down(code) {
+    return keys.has(code);
+  }
+  function hit(code) {
+    return tapped.has(code);
+  }
+  function hitButton(button) {
+    return tappedButtons.has(button);
+  }
+  // WASD / arrows drive: x = strafe right, z = forward.
+  function moveAxis() {
+    let x = 0;
+    let z = 0;
+    if (keys.has("KeyW") || keys.has("ArrowUp")) z += 1;
+    if (keys.has("KeyS") || keys.has("ArrowDown")) z -= 1;
+    if (keys.has("KeyD")) x += 1;
+    if (keys.has("KeyA")) x -= 1;
+    const len = Math.hypot(x, z) || 1;
+    return { x: x / len, z: z / len };
+  }
+  function takeMouse() {
+    const dx = mouseDX;
+    const dy = mouseDY;
+    mouseDX = 0;
+    mouseDY = 0;
+    return { dx, dy };
+  }
+  function endFrame() {
+    tapped.clear();
+    tappedButtons.clear();
+  }
+  function isLocked() {
+    return locked;
+  }
+  return { down, hit, hitButton, moveAxis, takeMouse, endFrame, requestLock, isLocked };
 }
-
