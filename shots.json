@@ -1,0 +1,6 @@
+[
+  { "name": "1-chase.jpg", "query": "?shot=chase&seed=1" },
+  { "name": "2-street.jpg", "query": "?shot=street&seed=1" },
+  { "name": "3-drive.jpg", "query": "?shot=drive&seed=1" },
+  { "name": "4-menu.jpg", "query": "?shot=menu&seed=1" }
+]
